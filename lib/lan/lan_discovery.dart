@@ -52,40 +52,15 @@ extension _LanDiscovery on LanService {
           }
           try {
             final data = asJson(jsonDecode(utf8.decode(packet.data)));
-            var peer = LanPeer.fromJson(data, packet.address.address, clock());
+            final peer = LanPeer.fromJson(
+              data,
+              packet.address.address,
+              clock(),
+            );
             if (peer.id == id) continue;
-            final previous = _peers[peer.id];
-            final fresh = previous == null;
-            if (fresh && _peers.length >= 128) continue;
-            _rememberPeerEndpoint(peer);
-            final paired = _peerSessions[peer.id];
-            if (paired != null && paired.expires.isAfter(clock())) {
-              if (peer.address != paired.base.host) {
-                // Broadcasts may leave through a different NIC from the one
-                // selected by QR/manual pairing. Keep that authenticated
-                // endpoint rather than making the device appear disconnected
-                // whenever another interface announces the same device ID.
-                peer = LanPeer(
-                  id: peer.id,
-                  name: peer.name,
-                  address: paired.base.host,
-                  port: paired.base.port,
-                  lastSeen: peer.lastSeen,
-                );
-              } else if (peer.port != paired.base.port) {
-                // A port change on the paired address means the old listener
-                // has gone. Let discovery expose the new endpoint for pairing.
-                _disconnectPeer(peer.id);
-              }
-            }
-            _peers[peer.id] = peer;
+            _observePeer(peer);
             if (data.boolean('discover')) {
               datagrams.send(_discoveryPacket(), packet.address, packet.port);
-            }
-            if (fresh ||
-                previous.name != peer.name ||
-                previous.base != peer.base) {
-              _changed();
             }
           } catch (_) {}
         }
@@ -216,3 +191,4 @@ extension _LanDiscovery on LanService {
     }
   }
 }
+

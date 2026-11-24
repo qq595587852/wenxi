@@ -63,6 +63,23 @@ jobs:
           $env:GRADLE_USER_HOME = Join-Path $env:GITHUB_WORKSPACE '.local/gradle-home'
           & ./android/gradlew.bat -p android :app:testReleaseUnitTest -Ptarget-platform=android-arm64 --no-daemon
           if ($LASTEXITCODE -ne 0) { throw 'Android unit tests failed.' }
+      - name: Sign Android test package with a temporary key
+        if: matrix.target == 'android'
+        run: |
+          $keystore = Join-Path $env:RUNNER_TEMP 'asterlink-community-test.jks'
+          & keytool -genkeypair -keystore $keystore -storepass community-test -alias community-test -keypass community-test -dname 'CN=AsterLink Community Test,O=AsterLink,C=CN' -keyalg RSA -keysize 2048 -validity 10000
+          if ($LASTEXITCODE -ne 0) { throw 'Temporary test signing key creation failed.' }
+          $apk = 'build/app/outputs/flutter-apk/app-release.apk'
+          $apksigner = Join-Path $env:ANDROID_HOME 'build-tools/36.0.0/apksigner.bat'
+          & $apksigner sign --ks $keystore --ks-key-alias community-test --ks-pass pass:community-test --key-pass pass:community-test $apk
+          if ($LASTEXITCODE -ne 0) { throw 'Community test APK signing failed.' }
+          & $apksigner verify --verbose $apk
+          if ($LASTEXITCODE -ne 0) { throw 'Community test APK signature verification failed.' }
+      - name: Package Android test APK
+        if: matrix.target == 'android'
+        run: |
+          python tool/package-release.py --platform android
+          if ($LASTEXITCODE -ne 0) { throw 'Android test APK packaging failed.' }
       - name: Build Windows from source
         if: matrix.target != 'android'
         run: |
@@ -70,6 +87,22 @@ jobs:
           ./tool/build-windows.ps1 -Architecture $architecture -BuildConfig config/build.community.json
           . ./tool/windows-architecture.ps1
           Assert-AsterLinkWindowsArchitecture -RuntimePath "build/windows/$architecture/runner/Release" -Architecture $architecture
+      - name: Package Windows portable test build
+        if: matrix.target != 'android'
+        run: |
+          $architecture = if ('${{ matrix.target }}' -eq 'windows-arm64') { 'arm64' } else { 'x64' }
+          python tool/package-release.py --platform windows --architecture $architecture
+          if ($LASTEXITCODE -ne 0) { throw 'Windows test package packaging failed.' }
       - name: Test account and playback compatibility with the ARM64 SDK
         if: matrix.target == 'windows-arm64'
         run: flutter test --no-pub --concurrency=4 test/account_cookie_test.dart test/account_identity_test.dart test/floating_playback_test.dart test/playback_features_test.dart test/download_playback_test.dart
+      - name: Upload community test package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: community-${{ matrix.target }}
+          path: .local/release-assets/*
+          include-hidden-files: true
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+

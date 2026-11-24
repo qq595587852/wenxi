@@ -4,6 +4,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'dart:math';
 import 'dart:typed_data';
+import 'package:crypto/crypto.dart';
 import 'package:flutter/foundation.dart';
 import '../core/json.dart';
 import '../data/http.dart';
@@ -65,6 +66,18 @@ class _LanConnectionError extends AppException {
       );
 }
 
+String _lanPairProof(
+  String secret,
+  String hostId,
+  String peerId,
+  String replySession,
+  int port,
+  String name,
+) =>
+    Hmac(sha256, utf8.encode(secret))
+        .convert(utf8.encode('$hostId|$peerId|$replySession|$port|$name'))
+        .toString();
+
 bool _retryableLanRequest(Object error, String path) =>
     error is _LanConnectionError ||
     error is _LanRequestError &&
@@ -87,6 +100,13 @@ class LanService extends ChangeNotifier {
        _addresses = addresses ?? localLanAddresses,
        clock = clock ?? DateTime.now,
        unicastDiscovery = unicastDiscovery ?? Platform.isIOS {
+    for (final entry in store.data.list('lanTrustedDevices').take(32)) {
+      final peerId = entry.str('id'), secret = entry.str('secret');
+      if (RegExp(r'^[a-f0-9]{32}$').hasMatch(peerId) &&
+          RegExp(r'^[a-f0-9]{64}$').hasMatch(secret)) {
+        _trustedSecrets[peerId] = secret;
+      }
+    }
     _inbox.addAll(
       store.data.list('lanInbox').map(LanInboxItem.fromJson).take(100),
     );
@@ -106,6 +126,10 @@ class LanService extends ChangeNotifier {
   final _shares = <String, LanShare>{}, _peers = <String, LanPeer>{};
   final _sessions = <String, _LanSession>{};
   final _peerEndpoints = <String, List<Uri>>{};
+  final _trustedSecrets = <String, String>{};
+  final _autoReconnects = <String>{};
+  final _reconnectFailures = <String, DateTime>{};
+  final _pairingPeers = <String, Future<void>>{};
   final _peerSessions =
       <String, ({String token, Uri base, DateTime expires})>{};
   final _attempts = <String, List<DateTime>>{};
@@ -149,6 +173,7 @@ class LanService extends ChangeNotifier {
       _shares.values.fold(0, (n, share) => n + share.responses.length);
   List<LanPeer> get peers =>
       _peers.values.toList()..sort((a, b) => a.name.compareTo(b.name));
+  bool trusted(LanPeer peer) => _trustedSecrets.containsKey(peer.id);
   List<LanInboxItem> get inbox => List.unmodifiable(_inbox);
   LanPeer? senderOf(LanInboxItem item) => _peers[item.senderId];
   List<LanShare> get shares =>
@@ -513,27 +538,92 @@ class LanService extends ChangeNotifier {
   Future<void> connect(LanPeer peer, String code) async {
     await start();
     require(RegExp(r'^\d{6}$').hasMatch(code), '请输入对方设备显示的 6 位连接码');
+    await _connectPair(peer, code: code);
+  }
+
+  Future<void> connectTrusted(LanPeer peer) async {
+    await start();
+    final secret = _trustedSecrets[peer.id];
+    require(secret != null, '此设备尚未配对，请先扫码或输入连接码');
+    try {
+      await _connectPair(peer, trustedSecret: secret);
+    } on _LanRequestError catch (error) {
+      if ({401, 403}.contains(error.status)) {
+        await _removeTrustedSecret(peer.id);
+      }
+      rethrow;
+    }
+  }
+
+  Future<void> _connectPair(
+    LanPeer peer, {
+    String? code,
+    String? trustedSecret,
+  }) async {
+    final pending = _pairingPeers[peer.id];
+    if (pending != null) {
+      await pending;
+      return;
+    }
+    final operation = _connectPairLocked(
+      peer,
+      code: code,
+      trustedSecret: trustedSecret,
+    );
+    _pairingPeers[peer.id] = operation;
+    try {
+      await operation;
+    } finally {
+      if (_pairingPeers[peer.id] == operation) _pairingPeers.remove(peer.id);
+    }
+  }
+
+  Future<void> _connectPairLocked(
+    LanPeer peer, {
+    String? code,
+    String? trustedSecret,
+  }) async {
     peer = await _findPeerEndpoint(peer.id, [
       peer.base,
       ...?_peerEndpoints[peer.id],
     ]);
     final replySession = lanId();
+    final storedSecret = _trustedSecrets[peer.id];
+    final proofSecret = trustedSecret ?? storedSecret;
+    final newSecret = proofSecret == null ? '${lanId()}${lanId()}' : '';
     final result = await _json(
       peer.base.replace(path: '/v1/pair'),
       method: 'POST',
       body: {
-        'code': code,
+        'code': code ?? '',
         'id': id,
         'name': name,
         'port': port,
         'replySession': replySession,
         'reverseTransfer': true,
+        'trustSecret': newSecret,
+        'proof': proofSecret == null
+            ? ''
+            : _lanPairProof(
+                proofSecret,
+                peer.id,
+                id,
+                replySession,
+                port,
+                name,
+              ),
       },
     );
     final token = result.str('session');
     require(RegExp(r'^[a-f0-9]{32}$').hasMatch(token), '设备返回的连接凭据无效');
     require(result.str('id') == peer.id, '对方设备已变化，请重新发现设备');
     require(running, '设备互联已关闭');
+    final pairedSecret = result.str('trustSecret');
+    if (result.boolean('trusted') &&
+        RegExp(r'^[a-f0-9]{64}$').hasMatch(pairedSecret)) {
+      await _saveTrustedSecret(peer.id, pairedSecret);
+    }
+    _reconnectFailures.remove(peer.id);
     final expires = clock().add(const Duration(hours: 4));
     _disconnectPeer(peer.id);
     if (result.boolean('bidirectional')) {
@@ -564,6 +654,41 @@ class LanService extends ChangeNotifier {
         'bidirectional': result.boolean('bidirectional'),
         'reverseTransfer': result.boolean('reverseTransfer'),
       },
+    );
+    _changed();
+  }
+
+  Future<void> _saveTrustedSecret(String peerId, String secret) async {
+    if (!RegExp(r'^[a-f0-9]{32}$').hasMatch(peerId) ||
+        !RegExp(r'^[a-f0-9]{64}$').hasMatch(secret)) {
+      return;
+    }
+    _trustedSecrets[peerId] = secret;
+    final next = [
+      {'id': peerId, 'secret': secret},
+      ...store.data
+          .list('lanTrustedDevices')
+          .where((entry) => entry.str('id') != peerId),
+    ].take(32).toList();
+    await store.put('lanTrustedDevices', next);
+  }
+
+  Future<void> forgetPeer(LanPeer peer) async {
+    final pending = _pairingPeers[peer.id];
+    if (pending != null) await pending;
+    await _removeTrustedSecret(peer.id);
+  }
+
+  Future<void> _removeTrustedSecret(String peerId) async {
+    _trustedSecrets.remove(peerId);
+    _reconnectFailures[peerId] = DateTime(9999);
+    _disconnectPeer(peerId);
+    await store.put(
+      'lanTrustedDevices',
+      store.data
+          .list('lanTrustedDevices')
+          .where((entry) => entry.str('id') != peerId)
+          .toList(),
     );
     _changed();
   }
@@ -910,3 +1035,4 @@ class LanService extends ChangeNotifier {
     dispose();
   }
 }
+

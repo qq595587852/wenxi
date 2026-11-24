@@ -323,6 +323,14 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
       orElse: () => peer,
     );
     if (lan.connected(peer)) return true;
+    if (lan.trusted(peer)) {
+      final reconnected = await _run(() async {
+        await lan.connectTrusted(peer);
+        return true;
+      }, '正在自动连接已配对设备…');
+      if (reconnected == true) return true;
+      if (lan.trusted(peer)) return false;
+    }
     final code = await _input(
       '连接 ${peer.name}',
       '输入对方设备的 6 位连接码',
@@ -494,6 +502,13 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
               subtitle: const Text('文字、网址或网盘分享文案'),
               onTap: () => Navigator.pop(context, 'message'),
             ),
+            if (lan.trusted(peer))
+              ListTile(
+                leading: const Icon(CupertinoIcons.delete),
+                title: const Text('忘记此设备'),
+                subtitle: const Text('取消自动重连；下次需要重新配对'),
+                onTap: () => Navigator.pop(context, 'forget'),
+              ),
           ],
         ),
       ),
@@ -501,6 +516,10 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
     if (!mounted) return;
     if (action == 'message') {
       await _sendMessage(peer);
+      return;
+    }
+    if (action == 'forget') {
+      await _run(() => lan.forgetPeer(peer), '正在取消设备配对…');
       return;
     }
     if (action != 'files') return;
@@ -868,14 +887,12 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
           ),
         ],
       ),
-      if (_desktop)
-        Text(
-          '另一台设备可输入连接码，或在文析助手中扫码连接。',
-          style: TextStyle(
-            fontSize: 12,
-            color: secondary(context),
-            height: 1.5,
-          ),
+      Text(
+        '首次输入连接码或扫码配对后会记住设备，之后在局域网内自动重连。',
+        style: TextStyle(
+          fontSize: 12,
+          color: secondary(context),
+          height: 1.5,
         ),
       if (defaultTargetPlatform == TargetPlatform.windows)
         TextButton.icon(
@@ -2023,3 +2040,4 @@ class _LanInputDialogState extends State<_LanInputDialog> {
     ],
   );
 }
+
