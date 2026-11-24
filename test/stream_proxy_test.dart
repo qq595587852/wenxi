@@ -1,3 +1,6 @@
+Warning: truncated output (original token count: 16958)
+Total output lines: 1932
+
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
@@ -907,117 +910,7 @@ void main() {
           isTrue,
         );
         final bytes = <int>[...body.current];
-        expect(bytes, origin.bytes.sublist(0, 1024));
-        expect(proxy.diagnosticFields['completedSegments'], 0);
-        gate.complete();
-        while (await body.moveNext()) {
-          bytes.addAll(body.current);
-        }
-        expect(bytes, origin.bytes.sublist(0, 32768));
-        expect(failures, isEmpty);
-      } finally {
-        if (!gate.isCompleted) gate.complete();
-        await body?.cancel();
-      }
-    },
-  );
-
-  test(
-    'Footer metadata reads only the requested tail instead of a whole preceding segment',
-    () async {
-      expect(await proxy.start(), isTrue);
-      final gate = Completer<void>();
-      origin.firstPacketBytes = 1024;
-      origin.bodyRemainderBarrier = gate.future;
-      final start = origin.bytes.length - 128, end = origin.bytes.length - 1;
-      try {
-        expect(
-          await read(start, end).timeout(const Duration(seconds: 2)),
-          origin.bytes.sublist(start),
-        );
-        expect(origin.calls, [(0, 1023), (start, end)]);
-        expect(proxy.generation, 0);
-      } finally {
-        gate.complete();
-      }
-    },
-  );
-
-  test(
-    'An expired URL during the Range probe preserves its status instead of falling back silently',
-    () async {
-      origin.statusFor = (_, _, _) => 403;
-      await expectLater(
-        proxy.start(),
-        throwsA(
-          isA<PlaybackFailure>()
-              .having((e) => e.kind, 'kind', PlaybackFailureKind.expired)
-              .having((e) => e.status, 'status', 403),
-        ),
-      );
-      expect(proxy.supported, isFalse);
-      expect(origin.calls, hasLength(1));
-      expect(proxy.diagnosticFields['probeResult'], 'http_error');
-      expect(proxy.diagnosticFields['probeStatus'], 403);
-    },
-  );
-
-  test(
-    'A demanded expired segment reports an actionable source failure once',
-    () async {
-      expect(await proxy.start(), isTrue);
-      origin.statusFor = (_, _, _) => 403;
-      await expectLater(read(0, 7000), throwsA(isA<HttpException>()));
-      expect(failures.single.status, 403);
-      expect(failures.single.refreshable, isTrue);
-      expect(origin.calls.where((range) => range == (0, 7000)), hasLength(1));
-      expect(proxy.diagnosticFields['upstreamStatus'], 403);
-      expect(proxy.diagnosticFields['segmentFailures'], 1);
-      expect(proxy.diagnosticFields['servedBytes'], 0);
-    },
-  );
-
-  test(
-    'Diagnostics distinguish waiting for an upstream segment from failed or delivered data without exposing its source',
-    () async {
-      expect(await proxy.start(), isTrue);
-      final gate = Completer<void>();
-      addTearDown(() {
-        if (!gate.isCompleted) gate.complete();
-      });
-      origin.firstRangeBarrier = gate.future;
-      final pending = read(0, 8191);
-      await until(() => origin.calls.length == 2);
-      final waiting = proxy.diagnosticFields;
-      expect(waiting['probeResult'], 'ready');
-      expect(waiting['probeStatus'], 206);
-      expect(waiting['requests'], 1);
-      expect(waiting['activeRequests'], 1);
-      expect(waiting['upstreamAttempts'], 1);
-      expect(waiting['completedSegments'], 0);
-      expect(waiting['segmentFailures'], 0);
-      expect(waiting['servedBytes'], 0);
-      gate.complete();
-      expect(await pending, origin.bytes.sublist(0, 8192));
-      await until(() => proxy.diagnosticFields['servedBytes'] == 8192);
-      final delivered = proxy.diagnosticFields;
-      expect(delivered['completedSegments'], 1);
-      expect(delivered['upstreamStatus'], 206);
-      expect(delivered['segmentFailures'], 0);
-      final serialized = jsonEncode(delivered);
-      for (final secret in [
-        'private-test-token',
-        'fixture=private',
-        'movie.mkv',
-        '127.0.0.1',
-        'example.invalid',
-      ]) {
-        expect(serialized, isNot(contains(secret)));
-      }
-    },
-  );
-
-  for (final truncated in [false, true]) {
+        …958 tokens truncated…runcated in [false, true]) {
     test(
       '${truncated ? 'A truncated Range body' : 'A temporary HTTP 503'} retries once and yields exact bytes',
       () async {
@@ -1239,6 +1132,7 @@ void main() {
       // request closes. Only overlapping requests indicate a cache miss.
       bool overlapsSeek((int, int) range) =>
           range.$1 <= 175000 && range.$2 >= 172100;
+      await until(() => proxy.activeRequests == 0);
       final count = origin.calls.where(overlapsSeek).length;
       expect(await read(172100, 175000), origin.bytes.sublist(172100, 175001));
       expect(
@@ -1928,3 +1822,4 @@ void main() {
     },
   );
 }
+

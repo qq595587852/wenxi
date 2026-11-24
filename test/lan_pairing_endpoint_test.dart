@@ -26,6 +26,8 @@ void main() {
         addresses: () async => ['127.0.0.1'],
       );
       final sender = device('QR sender'), receiver = device('QR scanner');
+      LanPeer peerFor(LanService service, String id) =>
+          service.peers.singleWhere((peer) => peer.id == id);
       final alternate = await RawDatagramSocket.bind(
         InternetAddress('127.0.0.2'),
         0,
@@ -52,13 +54,15 @@ void main() {
           InternetAddress.loopbackIPv4,
           receiver.discoveryPort,
         );
-        await until(() => receiver.peers.single.name == 'QR sender renamed');
-        final discovered = receiver.peers.single;
+        await until(
+          () => peerFor(receiver, sender.id).name == 'QR sender renamed',
+        );
+        final discovered = peerFor(receiver, sender.id);
         expect(discovered.base, peer.base);
         expect(receiver.connected(discovered), isTrue);
         await receiver.sendMessage(discovered, 'QR pairing still usable');
         expect(sender.inbox.single.value, 'QR pairing still usable');
-        final reverse = sender.peers.single;
+        final reverse = peerFor(sender, receiver.id);
         alternate.send(
           utf8.encode(
             jsonEncode({
@@ -71,10 +75,15 @@ void main() {
           InternetAddress.loopbackIPv4,
           sender.discoveryPort,
         );
-        await until(() => sender.peers.single.name == 'QR scanner renamed');
-        expect(sender.peers.single.base, reverse.base);
-        expect(sender.connected(sender.peers.single), isTrue);
-        await sender.sendMessage(sender.peers.single, 'QR reply still usable');
+        await until(
+          () => peerFor(sender, receiver.id).name == 'QR scanner renamed',
+        );
+        expect(peerFor(sender, receiver.id).base, reverse.base);
+        expect(sender.connected(peerFor(sender, receiver.id)), isTrue);
+        await sender.sendMessage(
+          peerFor(sender, receiver.id),
+          'QR reply still usable',
+        );
         expect(receiver.inbox.single.value, 'QR reply still usable');
 
         // A restart on the selected IP must still invalidate its former session.
@@ -93,8 +102,8 @@ void main() {
           InternetAddress.loopbackIPv4,
           receiver.discoveryPort,
         );
-        await until(() => receiver.peers.single.port == newPort);
-        expect(receiver.connected(receiver.peers.single), isFalse);
+        await until(() => peerFor(receiver, sender.id).port == newPort);
+        expect(receiver.connected(peerFor(receiver, sender.id)), isFalse);
       } finally {
         alternate.close();
         original.close();
@@ -105,3 +114,4 @@ void main() {
     },
   );
 }
+
