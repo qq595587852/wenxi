@@ -98,27 +98,23 @@ extension _LanServer on LanService {
           return;
         }
         final peerId = body.str('id'), peerName = body.str('name');
-        require(
-          RegExp(r'^[a-f0-9]{32}$').hasMatch(peerId) &&
-              peerName.isNotEmpty &&
-              peerName.length <= 64 &&
-              !RegExp(r'[\x00-\x1f]').hasMatch(peerName),
-          '设备名称无效',
-        );
         final replySession = body.str('replySession');
         final peerPort = body.integer('port');
         final bidirectional = replySession.isNotEmpty;
-        if (bidirectional) {
-          require(
+        final identityValid =
+            RegExp(r'^[a-f0-9]{32}$').hasMatch(peerId) &&
+            peerName.isNotEmpty &&
+            peerName.length <= 64 &&
+            !RegExp(r'[\x00-\x1f]').hasMatch(peerName);
+        final replyInfoValid = !bidirectional ||
             RegExp(r'^[a-f0-9]{32}$').hasMatch(replySession) &&
                 peerPort > 0 &&
-                peerPort <= 65535,
-            '设备回连信息无效',
-          );
-        }
+                peerPort <= 65535;
         final knownSecret = _trustedSecrets[peerId];
         final proof = body.str('proof');
-        final proofValid = knownSecret != null &&
+        final proofValid = identityValid &&
+            replyInfoValid &&
+            knownSecret != null &&
             replySession.isNotEmpty &&
             proof ==
                 _lanPairProof(
@@ -139,6 +135,8 @@ extension _LanServer on LanService {
           );
           return;
         }
+        require(identityValid, '设备名称无效');
+        require(replyInfoValid, '设备回连信息无效');
         final requestedSecret = body.str('trustSecret');
         final trustedSecret = codeValid &&
                 RegExp(r'^[a-f0-9]{64}$').hasMatch(requestedSecret)
