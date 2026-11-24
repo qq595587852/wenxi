@@ -1239,6 +1239,7 @@ void main() {
       // request closes. Only overlapping requests indicate a cache miss.
       bool overlapsSeek((int, int) range) =>
           range.$1 <= 175000 && range.$2 >= 172100;
+      await until(() => proxy.activeRequests == 0);
       final count = origin.calls.where(overlapsSeek).length;
       expect(await read(172100, 175000), origin.bytes.sublist(172100, 175001));
       expect(
@@ -1928,3 +1929,4 @@ void main() {
     },
   );
 }
+

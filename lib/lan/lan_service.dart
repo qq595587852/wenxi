@@ -589,7 +589,7 @@ class LanService extends ChangeNotifier {
     ]);
     final replySession = lanId();
     final storedSecret = _trustedSecrets[peer.id];
-    final proofSecret = trustedSecret ?? storedSecret;
+    final proofSecret = code == null ? trustedSecret ?? storedSecret : null;
     final newSecret = proofSecret == null ? '${lanId()}${lanId()}' : '';
     final result = await _json(
       peer.base.replace(path: '/v1/pair'),
