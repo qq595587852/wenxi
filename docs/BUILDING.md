@@ -23,6 +23,8 @@ flutter pub get --enforce-lockfile
 
 提交到 `main` 或创建面向 `main` 的 PR 会运行 `CI`，先完成源码检查及 Flutter、原生组件测试，再构建 Android ARM64、Windows x64 和 Windows ARM64。该流程使用公开配置，安卓构建检查不需要签名密钥。Windows ARM64 使用独立的 Flutter 3.47.9 及固定引擎校验，详情见 [ARM64 构建](WINDOWS-ARM64-BUILD.md)。
 
+CI 成功后会上传 `community-android`、`community-windows` 和 `community-windows-arm64` 附件，可在 Actions 对应运行详情下载。Android 测试 APK 使用本次运行临时生成的签名，应用 ID 为 `com.asterlink.app.community`，不能覆盖正式版；不同运行的签名不同，安装新版前需要先卸载旧测试版。Windows 附件为便携 ZIP。要构建自己的修改，可先推送到个人 fork，再在 fork 的 **Actions → CI → Run workflow** 选择对应分支；无需在本机安装 Flutter。该流程只构建测试包，不需要或使用正式签名密钥。
+
 正式安装包在仓库的 **Actions → Build signed release → Run workflow** 中选择 `main` 后生成。推送与 `pubspec.yaml` 版本匹配的 `v` 标签也会触发，例如版本 `2.2.0+220` 对应 `v2.2.0+220`。工作流读取 GitHub 的 `release` environment：
 
 | 类型 | 名称 |
@@ -96,3 +98,4 @@ libmpv 和测试媒体，采用空音频/视频输出；它们不能替代安卓
 和长时间播放验证。
 
 更新链接的配置与安装行为见 [App 内更新](IN-APP-UPDATE.md)。
+

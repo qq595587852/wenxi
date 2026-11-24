@@ -58,6 +58,41 @@ extension _LanHttpDiscovery on LanService {
         previous.base != peer.base) {
       _changed();
     }
+    if (_trustedSecrets.containsKey(peer.id) && !connected(peer)) {
+      _autoReconnect(peer);
+    }
+  }
+
+  void _autoReconnect(LanPeer peer) {
+    if (!running ||
+        !_trustedSecrets.containsKey(peer.id) ||
+        connected(peer) ||
+        !_autoReconnects.add(peer.id)) {
+      return;
+    }
+    final retryAt = _reconnectFailures[peer.id];
+    if (retryAt != null && retryAt.isAfter(clock())) {
+      _autoReconnects.remove(peer.id);
+      return;
+    }
+    _reconnectFailures.remove(peer.id);
+    unawaited(
+      connectTrusted(peer).then<void>(
+        (_) {
+          _reconnectFailures.remove(peer.id);
+          DiagnosticLog.event(
+            'lan.reconnected',
+            fields: {'peer': DiagnosticLog.reference(peer.id)},
+          );
+        },
+        onError: (Object error, StackTrace _) {
+          _reconnectFailures[peer.id] = error is _LanRequestError &&
+                  {401, 403}.contains(error.status)
+              ? DateTime(9999)
+              : clock().add(const Duration(seconds: 30));
+        },
+      ).whenComplete(() => _autoReconnects.remove(peer.id)),
+    );
   }
 
   void _scheduleHttpDiscovery({bool immediate = false}) {
@@ -210,3 +245,4 @@ extension _LanHttpDiscovery on LanService {
     }
   }
 }
+

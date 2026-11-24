@@ -97,11 +97,6 @@ extension _LanServer on LanService {
           _reply(response, {'error': '连接码错误次数过多，请一分钟后再试'}, status: 429);
           return;
         }
-        if (body.str('code') != connectionCode) {
-          attempts.add(clock());
-          _reply(response, {'error': '连接码不正确，请查看对方设备的 6 位连接码'}, status: 403);
-          return;
-        }
         final peerId = body.str('id'), peerName = body.str('name');
         require(
           RegExp(r'^[a-f0-9]{32}$').hasMatch(peerId) &&
@@ -121,10 +116,44 @@ extension _LanServer on LanService {
             '设备回连信息无效',
           );
         }
+        final knownSecret = _trustedSecrets[peerId];
+        final proof = body.str('proof');
+        final proofValid = knownSecret != null &&
+            replySession.isNotEmpty &&
+            proof ==
+                _lanPairProof(
+                  knownSecret,
+                  id,
+                  peerId,
+                  replySession,
+                  peerPort,
+                  peerName,
+                );
+        final codeValid = body.str('code') == connectionCode;
+        if (!codeValid && !proofValid) {
+          attempts.add(clock());
+          _reply(
+            response,
+            {'error': '连接码不正确，或此设备尚未完成配对'},
+            status: 403,
+          );
+          return;
+        }
+        final requestedSecret = body.str('trustSecret');
+        final trustedSecret = codeValid &&
+                RegExp(r'^[a-f0-9]{64}$').hasMatch(requestedSecret)
+            ? requestedSecret
+            : knownSecret ?? '${lanId()}${lanId()}';
         final reverseTransfer =
             bidirectional && body.boolean('reverseTransfer');
         final cacheKey = '$remote/$peerId/$replySession';
-        final fingerprint = jsonEncode([peerName, peerPort, reverseTransfer]);
+        final fingerprint = jsonEncode([
+          peerName,
+          peerPort,
+          reverseTransfer,
+          proof,
+          requestedSecret,
+        ]);
         final cached = _pairReplies[cacheKey];
         if (bidirectional &&
             cached != null &&
@@ -136,6 +165,7 @@ extension _LanServer on LanService {
           return;
         }
         _disconnectPeer(peerId);
+        await _saveTrustedSecret(peerId, trustedSecret);
         final expires = clock().add(const Duration(hours: 4));
         _sessions.removeWhere(
           (key, value) =>
@@ -166,6 +196,8 @@ extension _LanServer on LanService {
           'session': token,
           'id': id,
           'bidirectional': bidirectional,
+          'trusted': true,
+          'trustSecret': trustedSecret,
           if (reverseTransfer) 'reverseTransfer': true,
         };
         if (bidirectional) {
@@ -527,3 +559,4 @@ extension _LanServer on LanService {
     }
   }
 }
+
