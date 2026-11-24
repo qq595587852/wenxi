@@ -894,6 +894,7 @@ class _DeviceLinkPageState extends State<DeviceLinkPage> {
           color: secondary(context),
           height: 1.5,
         ),
+      ),
       if (defaultTargetPlatform == TargetPlatform.windows)
         TextButton.icon(
           key: const Key('lan-allow-incoming'),
